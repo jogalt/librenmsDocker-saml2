@@ -124,7 +124,7 @@ RUN apk --update --no-cache add -t build-dependencies \
     python3-dev \
   && echo "Installing LibreNMS https://github.com/librenms/librenms.git#${LIBRENMS_VERSION}..." \
   && git clone --depth=1 --branch ${LIBRENMS_VERSION} https://github.com/librenms/librenms.git . \
-  && sed -i 's/"require": {/"require": {\n        "socialiteproviders\/saml2": "^6.0",/' composer.json \
+  && sed -i 's/"require": {/"require": {\n        "socialiteproviders\/saml2": "^5.0",/' composer.json \
   && pip3 install --ignore-installed -r requirements.txt --upgrade --break-system-packages \
   && mkdir config.d \
   && cp config.php.default config.php \
