@@ -35,7 +35,7 @@ jobs:
       push: ${{ github.event_name != 'pull_request' }}
       set-meta-labels: true
       meta-images: |
-        librenms/librenms
+        jogaltanon/librenms-saml2
       meta-tags: |
         type=match,pattern=(.*)-r,group=1
         type=ref,event=pr

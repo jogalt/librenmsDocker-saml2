@@ -19,7 +19,7 @@ on:
       - '**.md'
 
 env:
-  BUILD_TAG: librenms:test
+  BUILD_TAG: librenms-saml2:test
   CONTAINER_NAME: librenms
 
 jobs:
