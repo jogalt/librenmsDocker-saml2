@@ -124,7 +124,6 @@ RUN apk --update --no-cache add -t build-dependencies \
     python3-dev \
   && echo "Installing LibreNMS https://github.com/librenms/librenms.git#${LIBRENMS_VERSION}..." \
   && git clone --depth=1 --branch ${LIBRENMS_VERSION} https://github.com/librenms/librenms.git . \
-  && sed -i 's/"require": {/"require": {\n        "socialiteproviders\/saml2": "^5.0",/' composer.json \
   && pip3 install --ignore-installed -r requirements.txt --upgrade --break-system-packages \
   && mkdir config.d \
   && cp config.php.default config.php \
@@ -134,6 +133,8 @@ RUN apk --update --no-cache add -t build-dependencies \
   && echo "foreach (glob(\"${LIBRENMS_PATH}/config.d/*.php\") as \$filename) include \$filename;" >> config.php \
   && chown -R librenms:librenms ${LIBRENMS_PATH} \
   && su librenms -s /bin/sh -c "COMPOSER_CACHE_DIR=/tmp composer install --no-dev --no-interaction --no-ansi" \
+  && su librenms -s /bin/sh -c "composer require socialiteproviders/saml2 --no-update" \
+  && su librenms -s /bin/sh -c "composer update socialiteproviders/saml2 --no-dev --no-interaction --no-ansi --with-dependencies" \
   && apk del build-dependencies \
   && rm -rf .git \
     html/plugins/Test \
