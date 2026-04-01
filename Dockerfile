@@ -133,8 +133,12 @@ RUN apk --update --no-cache add -t build-dependencies \
   && echo "foreach (glob(\"${LIBRENMS_PATH}/config.d/*.php\") as \$filename) include \$filename;" >> config.php \
   && chown -R librenms:librenms ${LIBRENMS_PATH} \
   && su librenms -s /bin/sh -c "COMPOSER_CACHE_DIR=/tmp composer install --no-dev --no-interaction --no-ansi" \
+# 1. Add the SAML provider to composer.json
   && su librenms -s /bin/sh -c "composer require socialiteproviders/saml2 --no-update" \
-  && su librenms -s /bin/sh -c "composer update socialiteproviders/saml2 --no-dev --no-interaction --no-ansi --with-dependencies" \
+  # 2. INSTEAD of 'update', use 'require' with --fixed to skip the solver
+  && su librenms -s /bin/sh -c "composer require socialiteproviders/saml2:^5.0 --no-interaction --no-ansi --no-scripts --no-progress" \
+  # 3. Finalize the autoloader
+  && su librenms -s /bin/sh -c "composer dump-autoload -o" \
   && apk del build-dependencies \
   && rm -rf .git \
     html/plugins/Test \
