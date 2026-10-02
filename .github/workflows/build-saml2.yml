@@ -29,23 +29,127 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      candidate: ${{ steps.refs.outputs.candidate }}
+      platforms: ${{ steps.platforms.outputs.platforms }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_call' && inputs.ref || github.sha }}
 
+      - name: Resolve immutable candidate tag
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "candidate=jogaltanon/librenms-saml2:sha-$short_sha" >> "$GITHUB_OUTPUT"
+
       # Patch only the runner workspace. The tracked Dockerfile remains an exact
       # upstream file so sync-upstream can merge it normally.
-      - name: Inject SAML2 provider into upstream Dockerfile
+      - name: Inject SAML2 and security hardening
         run: |
           set -euo pipefail
           python3 .saml2/prepare-dockerfile.py
-          grep -n -A3 -B2 'socialiteproviders/saml2' Dockerfile
+          grep -n -A8 -B2 'urllib3>=2.8.0' Dockerfile
+          grep -n -A6 -B2 'socialiteproviders/saml2' Dockerfile
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve upstream image-all platforms
+        id: platforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          platforms="$(docker buildx bake image-all --print | jq -c '.target["image-all"].platforms')"
+          if [ "$(jq 'length' <<<"$platforms")" -lt 1 ]; then
+            echo "No platforms found in upstream image-all target" >&2
+            exit 1
+          fi
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
+          echo "Building upstream platforms: $platforms"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Build an immutable candidate first. :latest is not touched until every
+      # platform passes the blocking security checks below.
+      - name: Build and push upstream multi-arch SAML2 candidate
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          targets: image-all
+          pull: true
+          push: true
+          provenance: mode=max
+          set: |
+            image-all.tags=${{ steps.refs.outputs.candidate }}
+            image-all.cache-from=type=gha,scope=librenms-saml2
+            image-all.cache-to=type=gha,mode=max,scope=librenms-saml2
+
+  scan:
+    name: Security scan (${{ matrix.platform }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.build.outputs.platforms) }}
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Block promotion for fixable Critical/High findings in packages we can
+      # safely remediate in this fork without replacing upstream application
+      # components. Composer vulnerabilities are blocked earlier by composer audit.
+      - name: Block fixable Critical/High APK and Python CVEs
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: registry://${{ needs.build.outputs.candidate }}
+          platform: ${{ matrix.platform }}
+          only-severities: critical,high
+          only-package-types: apk,pypi
+          only-fixed: true
+          exit-code: true
+          summary: true
+
+      # Report Go findings but do not make generic stdlib matches a release
+      # blocker. LibreNMS currently imports gosu from tianon/gosu, whose security
+      # policy requires reachability analysis with govulncheck for Go CVEs.
+      - name: Report fixable Critical/High Go CVEs
+        uses: docker/scout-action@v1
+        continue-on-error: true
+        with:
+          command: cves
+          image: registry://${{ needs.build.outputs.candidate }}
+          platform: ${{ matrix.platform }}
+          only-severities: critical,high
+          only-package-types: golang
+          only-fixed: true
+          exit-code: false
+          summary: true
+
+  promote:
+    name: Promote candidate to latest
+    needs:
+      - build
+      - scan
+    runs-on: ubuntu-latest
+    steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -55,17 +159,12 @@ jobs:
           username: ${{ vars.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Use upstream's image-all target instead of maintaining our own platform
-      # list. This automatically follows platform changes in docker-bake.hcl.
-      - name: Build and push upstream multi-arch SAML2 image
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          targets: image-all
-          pull: true
-          push: true
-          provenance: mode=max
-          set: |
-            image-all.tags=jogaltanon/librenms-saml2:latest
-            image-all.cache-from=type=gha,scope=librenms-saml2
-            image-all.cache-to=type=gha,mode=max,scope=librenms-saml2
+      - name: Promote tested manifest to latest
+        shell: bash
+        env:
+          CANDIDATE: ${{ needs.build.outputs.candidate }}
+          FINAL: jogaltanon/librenms-saml2:latest
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$FINAL" "$CANDIDATE"
+          docker buildx imagetools inspect "$FINAL"

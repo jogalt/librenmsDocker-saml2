@@ -1,11 +1,14 @@
 name: sync-upstream
 
-# Run this manually from Actions -> sync-upstream -> Run workflow.
+# Runs hourly and can also be started manually from Actions -> sync-upstream.
 # It will not overwrite fork-specific files. If an upstream merge conflicts,
 # changes an allowed custom file, or creates an unexpected fork delta, it fails
 # before pushing master.
 on:
   workflow_dispatch:
+  schedule:
+    # Poll upstream hourly, offset from the top of the hour to reduce Actions congestion.
+    - cron: '17 * * * *'
 
 permissions:
   contents: write
