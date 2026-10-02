@@ -1,0 +1,100 @@
+name: sync-upstream
+
+# Run this manually from Actions -> sync-upstream -> Run workflow.
+# It will not overwrite fork-specific files. If an upstream merge conflicts,
+# changes an allowed custom file, or creates an unexpected fork delta, it fails
+# before pushing master.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+    steps:
+      - name: Checkout master with full history
+        uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Snapshot custom files
+        run: |
+          set -euo pipefail
+          sha256sum \
+            Dockerfile.saml2 \
+            README-SAML2.md \
+            .github/workflows/build-saml2.yml \
+            .github/workflows/sync-upstream.yml \
+            | sort > /tmp/custom-files.before
+
+      - name: Fetch and merge LibreNMS upstream
+        id: merge
+        run: |
+          set -euo pipefail
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/librenms/docker.git
+          git fetch --no-tags upstream master
+
+          before="$(git rev-parse HEAD)"
+          git merge --no-edit upstream/master
+          after="$(git rev-parse HEAD)"
+
+          if [ "$before" = "$after" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify custom files were not changed
+        run: |
+          set -euo pipefail
+          sha256sum \
+            Dockerfile.saml2 \
+            README-SAML2.md \
+            .github/workflows/build-saml2.yml \
+            .github/workflows/sync-upstream.yml \
+            | sort > /tmp/custom-files.after
+          diff -u /tmp/custom-files.before /tmp/custom-files.after
+
+      - name: Verify fork delta is custom-files-only
+        run: |
+          set -euo pipefail
+
+          git diff --name-only upstream/master...HEAD | sort > /tmp/fork-delta.txt
+
+          unexpected="$({
+            grep -vE '^Dockerfile\.saml2$|^README-SAML2\.md$|^\.github/workflows/build-saml2\.yml$|^\.github/workflows/sync-upstream\.yml$' /tmp/fork-delta.txt
+          } || true)"
+
+          if [ -n "$unexpected" ]; then
+            echo "Unexpected fork-specific files detected:" >&2
+            printf '%s\n' "$unexpected" >&2
+            echo >&2
+            echo "Refusing to push. Reconcile these files before syncing upstream." >&2
+            exit 1
+          fi
+
+          echo "Fork delta is limited to the approved custom files:"
+          cat /tmp/fork-delta.txt
+
+      - name: Push synchronized master
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin HEAD:master
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    uses: ./.github/workflows/build-saml2.yml
+    with:
+      ref: master
+    secrets: inherit
