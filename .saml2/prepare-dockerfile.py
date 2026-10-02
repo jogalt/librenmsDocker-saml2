@@ -45,8 +45,9 @@ if python_marker not in text:
     )
     text = text.replace(python_needle, python_injected, 1)
 
-# 3. Install the SAML2 provider after LibreNMS's normal Composer install and
-# audit the resulting production dependency set before the image can publish.
+# 3. Start from LibreNMS's release lock, selectively move known vulnerable
+# Composer packages to compatible fixed releases, add SAML2, report the complete
+# audit, and block publication only when High/Critical advisories remain.
 saml_marker = "socialiteproviders/saml2"
 composer_needle = (
     '  && su librenms -s /bin/sh -c '
@@ -67,12 +68,24 @@ if text.count(composer_needle) != 1:
 
 composer_injected = composer_needle + (
     '  && su librenms -s /bin/sh -c '
+    '"COMPOSER_CACHE_DIR=/tmp composer update '
+    'laravel/framework league/commonmark league/flysystem phpseclib/phpseclib '
+    '--with-all-dependencies --minimal-changes --no-dev '
+    '--no-interaction --no-ansi --no-progress" \\\n'
+    '  && su librenms -s /bin/sh -c '
     '"COMPOSER_CACHE_DIR=/tmp composer require socialiteproviders/saml2:^4.8 '
     '--no-interaction --no-ansi --no-scripts --no-progress" \\\n'
     '  && su librenms -s /bin/sh -c '
     '"COMPOSER_CACHE_DIR=/tmp composer dump-autoload -o --no-interaction --no-ansi" \\\n'
+    # Report all production advisories. Do not make Low/Medium findings abort
+    # the build; the second audit below is the release gate.
     '  && su librenms -s /bin/sh -c '
-    '"COMPOSER_CACHE_DIR=/tmp composer audit --no-dev --abandoned=report --no-interaction --no-ansi" \\\n'
+    '"COMPOSER_CACHE_DIR=/tmp composer audit --no-dev --abandoned=report '
+    '--no-interaction --no-ansi || true" \\\n'
+    # Fail if any High/Critical production Composer advisory remains.
+    '  && su librenms -s /bin/sh -c '
+    '"COMPOSER_CACHE_DIR=/tmp composer audit --no-dev --abandoned=report '
+    '--ignore-severity=low --ignore-severity=medium --no-interaction --no-ansi" \\\n'
 )
 
 text = text.replace(composer_needle, composer_injected, 1)

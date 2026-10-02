@@ -69,3 +69,13 @@ stdlib version alone.
 
 `sync-upstream` runs hourly at minute 17 and still supports manual dispatch. If
 upstream has not changed, it does not invoke a new image build.
+
+## Composer security remediation
+
+The build starts with the Composer lock shipped by the selected LibreNMS release,
+then performs a targeted minimal-change update of `laravel/framework`,
+`league/commonmark`, `league/flysystem`, and `phpseclib/phpseclib`. This avoids a
+blanket dependency refresh while allowing published security fixes to move ahead
+of the release lock when needed. All production Composer advisories are reported;
+remaining High/Critical advisories block publication, while Low/Medium findings
+remain visible for review.
