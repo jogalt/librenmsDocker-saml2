@@ -12,8 +12,11 @@ on:
     branches:
       - master
     paths:
-      - Dockerfile.saml2
-      - .github/workflows/build-saml2.yml
+      - '.saml2/**'
+      - '.github/workflows/build-saml2.yml'
+      - 'Dockerfile'
+      - 'docker-bake.hcl'
+      - 'rootfs/**'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -32,6 +35,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_call' && inputs.ref || github.sha }}
 
+      # Patch only the runner workspace. The tracked Dockerfile remains an exact
+      # upstream file so sync-upstream can merge it normally.
+      - name: Inject SAML2 provider into upstream Dockerfile
+        run: |
+          set -euo pipefail
+          python3 .saml2/prepare-dockerfile.py
+          grep -n -A3 -B2 'socialiteproviders/saml2' Dockerfile
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -44,19 +55,17 @@ jobs:
           username: ${{ vars.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push SAML2 image
-        uses: docker/build-push-action@v7
+      # Use upstream's image-all target instead of maintaining our own platform
+      # list. This automatically follows platform changes in docker-bake.hcl.
+      - name: Build and push upstream multi-arch SAML2 image
+        uses: docker/bake-action@v7
         with:
-          context: .
-          file: ./Dockerfile.saml2
+          source: .
+          targets: image-all
           pull: true
           push: true
-          platforms: |
-            linux/amd64
-            linux/arm/v7
-            linux/arm64
-            linux/ppc64le
-            linux/s390x
-          tags: jogaltanon/librenms-saml2:latest
-          cache-from: type=gha,scope=librenms-saml2
-          cache-to: type=gha,mode=max,scope=librenms-saml2
+          provenance: mode=max
+          set: |
+            image-all.tags=jogaltanon/librenms-saml2:latest
+            image-all.cache-from=type=gha,scope=librenms-saml2
+            image-all.cache-to=type=gha,mode=max,scope=librenms-saml2

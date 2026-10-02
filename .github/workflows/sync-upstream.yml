@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum \
-            Dockerfile.saml2 \
+            .saml2/prepare-dockerfile.py \
             README-SAML2.md \
             .github/workflows/build-saml2.yml \
             .github/workflows/sync-upstream.yml \
@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum \
-            Dockerfile.saml2 \
+            .saml2/prepare-dockerfile.py \
             README-SAML2.md \
             .github/workflows/build-saml2.yml \
             .github/workflows/sync-upstream.yml \
@@ -73,7 +73,7 @@ jobs:
           git diff --name-only upstream/master...HEAD | sort > /tmp/fork-delta.txt
 
           unexpected="$({
-            grep -vE '^Dockerfile\.saml2$|^README-SAML2\.md$|^\.github/workflows/build-saml2\.yml$|^\.github/workflows/sync-upstream\.yml$' /tmp/fork-delta.txt
+            grep -vE '^\.saml2/prepare-dockerfile\.py$|^README-SAML2\.md$|^\.github/workflows/build-saml2\.yml$|^\.github/workflows/sync-upstream\.yml$' /tmp/fork-delta.txt
           } || true)"
 
           if [ -n "$unexpected" ]; then

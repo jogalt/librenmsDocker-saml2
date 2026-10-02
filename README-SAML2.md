@@ -1,72 +1,45 @@
-# LibreNMS SAML2 fork maintenance
+# LibreNMS SAML2 Docker image
 
-This fork is designed so LibreNMS upstream synchronization cannot silently
-replace the SAML2 customization.
+This fork publishes `jogaltanon/librenms-saml2:latest` with
+`socialiteproviders/saml2:^4.8` installed in LibreNMS.
 
-## Fork-owned files
+## Design
 
-Only these files are fork-specific:
+The repository keeps LibreNMS upstream-owned files unchanged in Git. In
+particular, `Dockerfile`, `docker-bake.hcl`, `rootfs/`, `examples/`, and `test/`
+are allowed to sync directly from `librenms/docker:master`.
 
-- `Dockerfile.saml2`
-- `README-SAML2.md`
+Fork-specific behavior is limited to:
+
+- `.saml2/prepare-dockerfile.py`
 - `.github/workflows/build-saml2.yml`
 - `.github/workflows/sync-upstream.yml`
+- `README-SAML2.md`
 
-Everything else belongs to `librenms/docker` upstream and should remain
-unmodified in this fork.
+During a GitHub Actions build, `prepare-dockerfile.py` modifies the checked-out
+upstream `Dockerfile` **only in the runner workspace** by inserting the SAML2
+Composer dependency immediately after LibreNMS's normal Composer install.
+Nothing writes that modified Dockerfile back to the repository.
 
-## Build and publish
+The build then runs upstream's `image-all` Bake target. Therefore the SAML2
+image follows the platform list defined by the current upstream
+`docker-bake.hcl`; no architecture list is duplicated in this fork.
 
-No local Docker build is required. GitHub Actions builds and publishes:
+## Update LibreNMS
 
-`jogaltanon/librenms-saml2:latest`
+Run the `sync-upstream` workflow against `master`.
 
-The workflow uses the existing repository credentials:
+It fetches and merges `librenms/docker:master`, verifies the four custom files
+are unchanged, verifies there are no unexpected fork-only files, pushes the
+updated `master`, and invokes `build-saml2` if upstream changed.
 
-- Repository variable: `DOCKER_USERNAME`
-- Repository secret: `DOCKER_PASSWORD`
+## Build manually in GitHub
 
-The image extends `librenms/librenms:latest` and installs
-`socialiteproviders/saml2:^4.8`.
+Run the `build-saml2` workflow against `master`. No local Docker build is
+required.
 
-## Synchronize with LibreNMS upstream
+## Safety behavior
 
-Do not use `git reset --hard upstream/master` on the customized branch.
-
-Use the GitHub workflow instead:
-
-1. Open **Actions** in `jogalt/librenmsDocker-saml2`.
-2. Select **sync-upstream**.
-3. Select **Run workflow**.
-
-The workflow:
-
-1. Fetches `https://github.com/librenms/docker.git` branch `master`.
-2. Merges it into this repository's `master` branch.
-3. Verifies all four fork-owned files are byte-for-byte unchanged.
-4. Verifies the fork differs from current upstream only by those four files.
-5. Pushes the synchronized `master` only if all checks pass.
-6. Calls `build-saml2` to publish a refreshed `jogaltanon/librenms-saml2:latest`.
-
-If upstream ever creates one of the same custom filenames, changes result in a
-merge conflict, or another fork-only file is introduced, the synchronization
-fails before pushing rather than overwriting anything.
-
-## Manual Git synchronization
-
-If GitHub Actions cannot push because of branch protection, the equivalent safe
-Git-only operation is:
-
-```bash
-git switch master
-git fetch origin --prune
-git reset --hard origin/master
-git remote add upstream https://github.com/librenms/docker.git 2>/dev/null || \
-  git remote set-url upstream https://github.com/librenms/docker.git
-git fetch upstream --prune
-git merge --no-edit upstream/master
-git push origin master
-```
-
-This is a Git synchronization only. There is no local Docker build. A normal
-human push that changes `Dockerfile.saml2` triggers the GitHub build workflow.
+If upstream changes the Composer-install portion of its Dockerfile enough that
+the injector can no longer identify it unambiguously, the build fails instead
+of guessing or silently publishing an image without SAML support.
