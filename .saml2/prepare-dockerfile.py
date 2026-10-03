@@ -122,5 +122,36 @@ composer_injected = composer_needle + (
 )
 
 text = text.replace(composer_needle, composer_injected, 1)
+
+# 5. Upstream ships gosu only to run the artisan wrapper as librenms. The same
+# image already uses s6-setuidgid throughout its service scripts. Replace the
+# wrapper with the equivalent s6 helper and remove the otherwise-unused gosu
+# stage/copy so the Go runtime is not present in the final image.
+artisan_path = Path("rootfs/usr/local/bin/artisan")
+artisan_text = artisan_path.read_text()
+artisan_gosu = 'gosu librenms:librenms php artisan "$@"'
+artisan_s6 = 'exec s6-setuidgid librenms php artisan "$@"'
+
+if artisan_s6 not in artisan_text:
+    if artisan_text.count(artisan_gosu) != 1:
+        sys.exit(
+            "Refusing to patch: expected exactly one gosu invocation in "
+            "rootfs/usr/local/bin/artisan. Upstream wrapper changed; review before removing gosu."
+        )
+    artisan_text = artisan_text.replace(artisan_gosu, artisan_s6, 1)
+    artisan_path.write_text(artisan_text)
+
+gosu_stage = "FROM tianon/gosu:latest AS gosu\n\n"
+gosu_copy = "COPY --from=gosu /gosu /usr/local/bin/\n"
+
+if text.count(gosu_stage) != 1 or text.count(gosu_copy) != 1:
+    sys.exit(
+        "Refusing to patch: expected one upstream gosu stage and one gosu COPY. "
+        "Upstream Dockerfile changed; review before removing gosu."
+    )
+
+text = text.replace(gosu_stage, "", 1)
+text = text.replace(gosu_copy, "", 1)
+
 path.write_text(text)
-print("Injected SAML2 and security hardening into upstream Dockerfile.")
+print("Injected SAML2/security hardening, replaced artisan gosu usage, and removed gosu.")
