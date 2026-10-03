@@ -68,7 +68,7 @@ if text.count(composer_needle) != 1:
 
 composer_injected = composer_needle + (
     '  && su librenms -s /bin/sh -c '
-    '"COMPOSER_CACHE_DIR=/tmp composer update '
+    '"FORCE=1 COMPOSER_CACHE_DIR=/tmp composer update '
     'laravel/framework league/commonmark league/flysystem phpseclib/phpseclib '
     '--with-all-dependencies --minimal-changes --no-dev '
     '--no-interaction --no-ansi --no-progress" \\\n'
