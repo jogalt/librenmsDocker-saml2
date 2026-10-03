@@ -86,6 +86,18 @@ composer_injected = composer_needle + (
     '  && su librenms -s /bin/sh -c '
     '"COMPOSER_CACHE_DIR=/tmp composer audit --no-dev --abandoned=report '
     '--ignore-severity=low --ignore-severity=medium --no-interaction --no-ansi" \\\n'
+    # LibreNMS Docker disables in-container code updates and is upgraded by
+    # replacing the image. pip is therefore build-time tooling here. Remove it
+    # from the runtime image after all Python dependencies have been installed.
+    # This also removes pip's vendored dependency copies/SBOM, which otherwise
+    # surface as urllib3/msgpack/setuptools CVEs even when the runtime copies
+    # have already been upgraded.
+    '  && python3 -c "import pymysql, dotenv, redis, setuptools, psutil, command_runner; '
+    'print(\'LibreNMS Python runtime dependencies import successfully\')" \\\n'
+    '  && apk del py3-pip \\\n'
+    '  && rm -rf /usr/local/lib/python*/site-packages/pip '
+    '/usr/local/lib/python*/site-packages/pip-*.dist-info \\\n'
+    '  && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* \\\n'
 )
 
 text = text.replace(composer_needle, composer_injected, 1)
