@@ -24,7 +24,21 @@ if apk_upgrade not in text:
         )
     text = text.replace(apk_anchor, apk_anchor + apk_upgrade, 1)
 
-# 2. LibreNMS intentionally keeps Python requirements broad. Enforce minimum
+# 2. Keep Alpine's package-managed pip for the build instead of upgrading pip
+# in-place with pip itself. pip 26.x vendors its own urllib3/msgpack/setuptools
+# copies; self-upgrading Alpine's py3-pip can leave untracked vendor files behind
+# after `apk del py3-pip`, which vulnerability scanners continue to see.
+pip_upgrade_cmd = "pip3 install --upgrade --break-system-packages pip"
+
+if pip_upgrade_cmd in text:
+    if text.count(pip_upgrade_cmd) != 1:
+        sys.exit(
+            "Refusing to patch: expected exactly one upstream pip self-upgrade command, "
+            f"found {text.count(pip_upgrade_cmd)}. Upstream Dockerfile changed; review the hardening injector."
+        )
+    text = text.replace(pip_upgrade_cmd, "pip3 --version", 1)
+
+# 3. LibreNMS intentionally keeps Python requirements broad. Enforce minimum
 # patched versions for currently known fixable high-severity findings while
 # leaving upstream's requirements.txt untouched.
 python_needle = (
@@ -45,7 +59,7 @@ if python_marker not in text:
     )
     text = text.replace(python_needle, python_injected, 1)
 
-# 3. Start from LibreNMS's release lock, selectively move known vulnerable
+# 4. Start from LibreNMS's release lock, selectively move known vulnerable
 # Composer packages to compatible fixed releases, add SAML2, report the complete
 # audit, and block publication only when High/Critical advisories remain.
 saml_marker = "socialiteproviders/saml2"
@@ -95,9 +109,16 @@ composer_injected = composer_needle + (
     '  && python3 -c "import pymysql, dotenv, redis, setuptools, psutil, command_runner; '
     'print(\'LibreNMS Python runtime dependencies import successfully\')" \\\n'
     '  && apk del py3-pip \\\n'
-    '  && rm -rf /usr/local/lib/python*/site-packages/pip '
-    '/usr/local/lib/python*/site-packages/pip-*.dist-info \\\n'
-    '  && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* \\\n'
+    # Defensive cleanup for both Python installation prefixes. If an older
+    # image ever self-upgraded pip over Alpine's package, added vendor files may
+    # not have been tracked by apk and can otherwise survive package removal.
+    '  && rm -rf /usr/lib/python*/site-packages/pip '
+    '/usr/lib/python*/site-packages/pip-*.dist-info '
+    '/usr/local/lib/python*/site-packages/pip '
+    '/usr/local/lib/python*/site-packages/pip-*.dist-info '
+    '/root/.cache/pip \\\n'
+    '  && rm -f /usr/bin/pip /usr/bin/pip3 /usr/bin/pip3.* '
+    '/usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* \\\n'
 )
 
 text = text.replace(composer_needle, composer_injected, 1)
