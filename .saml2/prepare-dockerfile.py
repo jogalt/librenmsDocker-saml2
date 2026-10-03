@@ -123,23 +123,54 @@ composer_injected = composer_needle + (
 
 text = text.replace(composer_needle, composer_injected, 1)
 
-# 5. Upstream ships gosu only to run the artisan wrapper as librenms. The same
-# image already uses s6-setuidgid throughout its service scripts. Replace the
-# wrapper with the equivalent s6 helper and remove the otherwise-unused gosu
-# stage/copy so the Go runtime is not present in the final image.
-artisan_path = Path("rootfs/usr/local/bin/artisan")
-artisan_text = artisan_path.read_text()
-artisan_gosu = 'gosu librenms:librenms php artisan "$@"'
-artisan_s6 = 'exec s6-setuidgid librenms php artisan "$@"'
+# 5. Upstream uses gosu in both CLI wrappers: /usr/local/bin/artisan and
+# /usr/bin/lnms. The same image already uses s6-setuidgid throughout its service
+# scripts. Replace both wrappers with the equivalent s6 helper before removing
+# the gosu stage/copy so no startup or operator CLI path still depends on gosu.
+wrapper_replacements = [
+    (
+        Path("rootfs/usr/local/bin/artisan"),
+        'gosu librenms:librenms php artisan "$@"',
+        'exec s6-setuidgid librenms php artisan "$@"',
+    ),
+    (
+        Path("rootfs/usr/bin/lnms"),
+        'gosu librenms:librenms php -f /opt/librenms/lnms "$@"',
+        'exec s6-setuidgid librenms php -f /opt/librenms/lnms "$@"',
+    ),
+]
 
-if artisan_s6 not in artisan_text:
-    if artisan_text.count(artisan_gosu) != 1:
-        sys.exit(
-            "Refusing to patch: expected exactly one gosu invocation in "
-            "rootfs/usr/local/bin/artisan. Upstream wrapper changed; review before removing gosu."
-        )
-    artisan_text = artisan_text.replace(artisan_gosu, artisan_s6, 1)
-    artisan_path.write_text(artisan_text)
+for wrapper_path, gosu_command, s6_command in wrapper_replacements:
+    wrapper_text = wrapper_path.read_text()
+    if s6_command not in wrapper_text:
+        if wrapper_text.count(gosu_command) != 1:
+            sys.exit(
+                f"Refusing to patch: expected exactly one gosu invocation in {wrapper_path}. "
+                "Upstream wrapper changed; review before removing gosu."
+            )
+        wrapper_text = wrapper_text.replace(gosu_command, s6_command, 1)
+        wrapper_path.write_text(wrapper_text)
+
+# Refuse to remove gosu if upstream adds another runtime reference. This makes
+# an upstream change fail visibly instead of publishing an image that starts but
+# later breaks on an unpatched helper script.
+remaining_gosu_refs = []
+for candidate in Path("rootfs").rglob("*"):
+    if not candidate.is_file():
+        continue
+    try:
+        candidate_text = candidate.read_text()
+    except UnicodeDecodeError:
+        continue
+    for lineno, line in enumerate(candidate_text.splitlines(), 1):
+        if "gosu" in line:
+            remaining_gosu_refs.append(f"{candidate}:{lineno}: {line.strip()}")
+
+if remaining_gosu_refs:
+    sys.exit(
+        "Refusing to remove gosu: runtime references remain after wrapper replacement:\n"
+        + "\n".join(remaining_gosu_refs)
+    )
 
 gosu_stage = "FROM tianon/gosu:latest AS gosu\n\n"
 gosu_copy = "COPY --from=gosu /gosu /usr/local/bin/\n"
@@ -154,4 +185,4 @@ text = text.replace(gosu_stage, "", 1)
 text = text.replace(gosu_copy, "", 1)
 
 path.write_text(text)
-print("Injected SAML2/security hardening, replaced artisan gosu usage, and removed gosu.")
+print("Injected SAML2/security hardening, replaced gosu CLI wrappers, and removed gosu.")
