@@ -1,9 +1,12 @@
 name: sync-upstream
 
 # Runs hourly and can also be started manually from Actions -> sync-upstream.
-# It will not overwrite fork-specific files. If an upstream merge conflicts,
-# changes an allowed custom file, or creates an unexpected fork delta, it fails
-# before pushing master.
+# Upstream owns the LibreNMS Docker source tree, but this fork owns:
+#   .saml2/prepare-dockerfile.py
+#   README-SAML2.md
+#   .github/workflows/
+#
+# Upstream workflow files are intentionally not imported.
 on:
   workflow_dispatch:
   schedule:
@@ -18,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.merge.outputs.changed }}
+
     steps:
       - name: Checkout master with full history
         uses: actions/checkout@v6
@@ -33,6 +37,7 @@ jobs:
       - name: Snapshot custom files
         run: |
           set -euo pipefail
+
           sha256sum \
             .saml2/prepare-dockerfile.py \
             README-SAML2.md \
@@ -40,16 +45,44 @@ jobs:
             .github/workflows/sync-upstream.yml \
             | sort > /tmp/custom-files.before
 
+          rm -rf /tmp/fork-workflows
+          mkdir -p /tmp/fork-workflows
+          cp -a .github/workflows/. /tmp/fork-workflows/
+
       - name: Fetch and merge LibreNMS upstream
         id: merge
         run: |
           set -euo pipefail
+
           git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/librenms/docker.git
           git fetch --no-tags upstream master
 
           before="$(git rev-parse HEAD)"
-          git merge --no-edit upstream/master
+
+          # Nothing to do if upstream/master is already contained in this branch.
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "Upstream is already synchronized."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Always create a merge commit. This gives us a safe commit to amend
+          # after restoring the fork-owned workflow directory.
+          git merge --no-edit --no-ff upstream/master
+
+          # .github/workflows is owned by this fork. Remove anything imported
+          # from upstream and restore the exact pre-merge workflow directory.
+          rm -rf .github/workflows
+          mkdir -p .github/workflows
+          cp -a /tmp/fork-workflows/. .github/workflows/
+
+          git add -A .github/workflows
+
+          # Rewrite only the merge result. The upstream commit remains a parent,
+          # but its workflow tree is not imported into this fork.
+          git commit --amend --no-edit
+
           after="$(git rev-parse HEAD)"
 
           if [ "$before" = "$after" ]; then
@@ -61,22 +94,26 @@ jobs:
       - name: Verify custom files were not changed
         run: |
           set -euo pipefail
+
           sha256sum \
             .saml2/prepare-dockerfile.py \
             README-SAML2.md \
             .github/workflows/build-saml2.yml \
             .github/workflows/sync-upstream.yml \
             | sort > /tmp/custom-files.after
+
           diff -u /tmp/custom-files.before /tmp/custom-files.after
 
-      - name: Verify fork delta is custom-files-only
+      - name: Verify fork delta is fork-owned-files-only
         run: |
           set -euo pipefail
 
           git diff --name-only upstream/master...HEAD | sort > /tmp/fork-delta.txt
 
           unexpected="$({
-            grep -vE '^\.saml2/prepare-dockerfile\.py$|^README-SAML2\.md$|^\.github/workflows/build-saml2\.yml$|^\.github/workflows/sync-upstream\.yml$' /tmp/fork-delta.txt
+            grep -vE \
+              '^\.saml2/prepare-dockerfile\.py$|^README-SAML2\.md$|^\.github/workflows/.*$' \
+              /tmp/fork-delta.txt
           } || true)"
 
           if [ -n "$unexpected" ]; then
@@ -87,8 +124,16 @@ jobs:
             exit 1
           fi
 
-          echo "Fork delta is limited to the approved custom files:"
+          echo "Fork delta is limited to approved fork-owned paths:"
           cat /tmp/fork-delta.txt
+
+      - name: Verify no upstream workflows were imported
+        run: |
+          set -euo pipefail
+
+          diff -ruN \
+            /tmp/fork-workflows \
+            .github/workflows
 
       - name: Push synchronized master
         if: steps.merge.outputs.changed == 'true'
